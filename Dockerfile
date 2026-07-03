@@ -1,16 +1,17 @@
-# ===== Stage 1: Go Bridge statisch kompilieren (für glibc-Kompatibilität) =====
+# ===== Stage 1: Go Bridge kompilieren aus Fork =====
 FROM golang:1.25-bookworm AS go-builder
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libsqlite3-dev \
+    gcc libsqlite3-dev git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY whatsapp-bridge/go.mod whatsapp-bridge/go.sum ./
-RUN GOTOOLCHAIN=local go mod download
+# Direkt aus Fork klonen
+RUN git clone --depth 1 https://github.com/michael171185-coder/whatsapp-mcp.git /src
 
-COPY whatsapp-bridge/main.go .
-RUN GOTOOLCHAIN=local CGO_ENABLED=1 go build -ldflags="-w -s" -o whatsapp-bridge .
+WORKDIR /src/whatsapp-bridge
+RUN go mod download
+RUN CGO_ENABLED=1 go build -ldflags="-w -s" -o whatsapp-bridge .
 
 # ===== Stage 2: Runtime =====
 FROM python:3.12-slim
@@ -20,23 +21,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-# Go-Bridge
 RUN mkdir -p /app/whatsapp-bridge/store /app/whatsapp-mcp-server
-COPY --from=go-builder /build/whatsapp-bridge /app/whatsapp-bridge/whatsapp-bridge
+COPY --from=go-builder /src/whatsapp-bridge/whatsapp-bridge /app/whatsapp-bridge/whatsapp-bridge
 RUN chmod +x /app/whatsapp-bridge/whatsapp-bridge
 
-# Python MCP-Server
 WORKDIR /app/whatsapp-mcp-server
-COPY whatsapp-mcp-server/ .
+COPY --from=go-builder /src/whatsapp-mcp-server/ .
 
-# uv + deps installieren; mcpo global via pip
 RUN pip install --no-cache-dir uv mcpo && \
     uv sync --frozen
 
-# Supervisor Konfiguration
-COPY supervisord.conf /etc/supervisor/conf.d/whatsapp.conf
+COPY --from=go-builder /src/supervisord.conf /etc/supervisor/conf.d/whatsapp.conf
 
-EXPOSE 8000
+EXPOSE 8000 8080
 
 VOLUME ["/app/whatsapp-bridge/store"]
 
